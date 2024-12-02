@@ -17,6 +17,7 @@ library(ggplot2)
 library(rnoaa)
 library(dplyr)
 library(broom)
+library(kableExtra)
 ```
 
 
@@ -74,7 +75,7 @@ quantile(beta_1_values, c(0.025, 0.975))
 
 ## Problem 2
 
-### 2.1 
+### 2.1 Clean data & filter
 
 ```{r, message=FALSE, warning=FALSE}
 homicide_data = read_csv("data/homicide-data.csv", na = c("NA", "", ".")) |> 
@@ -82,56 +83,100 @@ homicide_data = read_csv("data/homicide-data.csv", na = c("NA", "", ".")) |>
   rename_with(~ gsub("^x", "", .))
 ```
 
-```{r}
-homicide_clean = homicide_data |>
-  mutate(city_state = paste(city, state, sep = ", ")) |>
-  group_by(city_state) |>
-  summarise(
-    total_homicides = n(),
-    unresolved_homicides = sum(disposition %in% c("Closed without arrest", "Open/No arrest"))
-  )
+```{r, warning=FALSE}
+homicides_cleaned = homicide_data |>
+  filter(!(city %in% c("Dallas", "Phoenix", "Kansas City", "Tulsa"))) |> 
+  filter(victim_race %in% c("White", "Black")) |> 
+  mutate(city_state = paste(city, state, sep = ", "),
+         solved = if_else(disposition %in% c("Closed without arrest", "Open/No arrest"), 0, 1),
+         victim_age = as.numeric(victim_age))
 ```
 
+
+### 2.2 `glm` for Baltimore
+
 ```{r, warning=FALSE, message=FALSE}
-# 数据清理
-homicides_cleaned <- homicides %>%
-  filter(!(city %in% c("Dallas", "Phoenix", "Kansas City", "Tulsa"))) %>%
-  filter(victim_race %in% c("White", "Black")) %>%
-  mutate(
-    city_state = paste(city, state, sep = ", "),
-    solved = if_else(disposition == "Closed by arrest", 1, 0),
-    victim_age = as.numeric(victim_age)
-  ) %>%
-  filter(!is.na(victim_age))
-
-# 逻辑回归分析
+# Choose Baldimore data.
 baltimore_data <- homicides_cleaned %>% filter(city_state == "Baltimore, MD")
-glm_fit <- glm(solved ~ victim_age + victim_sex + victim_race, data = baltimore_data, family = binomial)
-tidy_glm <- broom::tidy(glm_fit)
 
-# 提取调整后的OR和CI
-exp_coef <- exp(tidy_glm$estimate)
-conf_int <- exp(confint(glm_fit))
+# glm for Baltimore
+glm_fit_bal <- glm(solved ~ victim_age + victim_sex + victim_race, data = baltimore_data, family = binomial)
+tidy_glm_bal <- broom::tidy(glm_fit_bal, conf.int = TRUE)
+```
 
-# 对所有城市进行逻辑回归分析
+
+```{r}
+result_summary_bal <- tidy_glm_bal |>
+   mutate(
+    OR = round(exp(estimate), 4), 
+    conf.low = exp(estimate - 1.96 * std.error),
+    conf.high = exp(estimate + 1.96 * std.error), 
+    CI = paste0("(", round(conf.low, 4), ", ", round(conf.high, 4), ")")  
+  ) |>
+  select(term, OR, CI)
+
+result_summary_bal |>
+  knitr::kable() |> 
+  kable_styling(full_width = FALSE) %>%
+  column_spec(3, width = "6cm") 
+```
+
+* The male ........
+
+### 2.3 Analyze all cities
+
+```{r, warning=FALSE}
+
 glm_results <- homicides_cleaned %>%
   group_by(city_state) %>%
   nest() %>%
   mutate(
     glm_model = map(data, ~ glm(solved ~ victim_age + victim_sex + victim_race, data = ., family = binomial)),
     tidy_model = map(glm_model, broom::tidy),
-    or_ci = map(glm_model, ~ exp(confint(.)))
+    conf_int = map(glm_model, ~ confint(.)) 
   ) %>%
-  unnest(tidy_model, or_ci)
+  mutate(
+    tidy_model = map2(tidy_model, conf_int, ~ {
+      # 将置信区间添加到 tidy 对象中
+      conf_df <- as.data.frame(.y)
+      names(conf_df) <- c("conf.low", "conf.high")
+      tidy_df <- bind_cols(.x, conf_df)
+      tidy_df
+    })
+  ) %>%
+  unnest(cols = tidy_model)
 
+# 计算调整后的 OR 和 CI
+glm_results <- glm_results %>%
+  mutate(
+    OR = exp(estimate),  
+    conf.low = exp(conf.low), 
+    conf.high = exp(conf.high), 
+    CI = paste0("(", round(conf.low, 4), ", ", round(conf.high, 4), ")") 
+  ) %>%
+  filter(term == "victim_sexMale") |> 
+  select(city_state, OR, CI, p.value)
+
+glm_results |>
+  arrange(OR) |> 
+  knitr::kable(, digits = 4) |> 
+  kable_styling(full_width = FALSE) %>%
+  column_spec(4, width = "6cm") 
 ```
+
+The result shows that:
+
+* 
 
 ## Problem 3
 
-```{r}
-# 加载数据
+```{r, message=FALSE, warning=FALSE}
+# Load data
 birthweight_data <- read_csv("data/birthweight.csv")
+```
 
+
+```{r}
 # 数据清理
 birthweight_clean <- birthweight_data %>%
   mutate(
