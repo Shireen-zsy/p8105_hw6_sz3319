@@ -1,5 +1,5 @@
 ---
-title: "p8105_hw5_sz3319"
+title: "p8105_hw6_sz3319"
 author: "Shiyu Zhang"
 date: "2024-12-02"
 output: 
@@ -12,13 +12,160 @@ output:
 library(tidyverse)
 library(knitr)
 library(rvest)
-library(broom)
-library(dplyr)
 library(purrr)
 library(ggplot2)
+library(rnoaa)
+library(dplyr)
+library(broom)
 ```
 
 
 ## Problem 1
 
 ### 1.1 
+
+```{r, warning=FALSE, message=FALSE}
+# 下载2017年Central Park的天气数据
+weather_df <- rnoaa::meteo_pull_monitors(
+  c("USW00094728"),
+  var = c("PRCP", "TMIN", "TMAX"), 
+  date_min = "2017-01-01",
+  date_max = "2017-12-31"
+) %>%
+  mutate(
+    name = recode(id, USW00094728 = "CentralPark_NY"),
+    tmin = tmin / 10,
+    tmax = tmax / 10
+  ) %>%
+  select(name, id, everything())
+
+# 线性回归模型：tmax作为因变量，tmin作为自变量
+lm_fit <- lm(tmax ~ tmin, data = weather_df)
+
+# 提取回归结果
+glance_fit <- broom::glance(lm_fit)
+tidy_fit <- broom::tidy(lm_fit)
+
+# Bootstrap 分析
+set.seed(123)
+bootstrap_samples <- 5000
+bootstrap_results <- replicate(
+  bootstrap_samples,
+  {
+    sample_indices <- sample(nrow(weather_df), replace = TRUE)
+    sample_data <- weather_df[sample_indices, ]
+    fit <- lm(tmax ~ tmin, data = sample_data)
+    c(broom::glance(fit)$r.squared, broom::tidy(fit)$estimate[2])
+  }
+)
+
+# 提取结果并作图
+r_squared_values <- bootstrap_results[1, ]
+beta_1_values <- bootstrap_results[2, ]
+
+hist(r_squared_values, main = "Distribution of R-squared from Bootstrap Samples", xlab = "R-squared")
+hist(beta_1_values, main = "Distribution of Beta_1 from Bootstrap Samples", xlab = "Beta_1")
+
+# 计算95%置信区间
+quantile(r_squared_values, c(0.025, 0.975))
+quantile(beta_1_values, c(0.025, 0.975))
+
+```
+
+## Problem 2
+
+### 2.1 
+
+```{r, message=FALSE, warning=FALSE}
+homicide_data = read_csv("data/homicide-data.csv", na = c("NA", "", ".")) |> 
+  janitor::clean_names() |> 
+  rename_with(~ gsub("^x", "", .))
+```
+
+```{r}
+homicide_clean = homicide_data |>
+  mutate(city_state = paste(city, state, sep = ", ")) |>
+  group_by(city_state) |>
+  summarise(
+    total_homicides = n(),
+    unresolved_homicides = sum(disposition %in% c("Closed without arrest", "Open/No arrest"))
+  )
+```
+
+```{r, warning=FALSE, message=FALSE}
+# 数据清理
+homicides_cleaned <- homicides %>%
+  filter(!(city %in% c("Dallas", "Phoenix", "Kansas City", "Tulsa"))) %>%
+  filter(victim_race %in% c("White", "Black")) %>%
+  mutate(
+    city_state = paste(city, state, sep = ", "),
+    solved = if_else(disposition == "Closed by arrest", 1, 0),
+    victim_age = as.numeric(victim_age)
+  ) %>%
+  filter(!is.na(victim_age))
+
+# 逻辑回归分析
+baltimore_data <- homicides_cleaned %>% filter(city_state == "Baltimore, MD")
+glm_fit <- glm(solved ~ victim_age + victim_sex + victim_race, data = baltimore_data, family = binomial)
+tidy_glm <- broom::tidy(glm_fit)
+
+# 提取调整后的OR和CI
+exp_coef <- exp(tidy_glm$estimate)
+conf_int <- exp(confint(glm_fit))
+
+# 对所有城市进行逻辑回归分析
+glm_results <- homicides_cleaned %>%
+  group_by(city_state) %>%
+  nest() %>%
+  mutate(
+    glm_model = map(data, ~ glm(solved ~ victim_age + victim_sex + victim_race, data = ., family = binomial)),
+    tidy_model = map(glm_model, broom::tidy),
+    or_ci = map(glm_model, ~ exp(confint(.)))
+  ) %>%
+  unnest(tidy_model, or_ci)
+
+```
+
+## Problem 3
+
+```{r}
+# 加载数据
+birthweight_data <- read_csv("data/birthweight.csv")
+
+# 数据清理
+birthweight_clean <- birthweight_data %>%
+  mutate(
+    babysex = factor(babysex, labels = c("Male", "Female")),
+    mrace = factor(mrace, labels = c("White", "Black", "Asian", "Puerto Rican", "Other")),
+    malform = factor(malform, labels = c("Absent", "Present"))
+  ) %>%
+  drop_na()
+
+# 回归模型
+birthweight_lm <- lm(bwt ~ bhead + blength + delwt + fincome + gestweeks, data = birthweight_clean)
+
+# 模型残差与拟合值的图
+birthweight_residuals <- birthweight_clean %>%
+  add_predictions(birthweight_lm) %>%
+  add_residuals(birthweight_lm)
+
+ggplot(birthweight_residuals, aes(x = pred, y = resid)) +
+  geom_point() +
+  geom_smooth(se = FALSE) +
+  labs(title = "Residuals vs Fitted Values", x = "Fitted Values", y = "Residuals")
+
+# 模型比较
+model1 <- lm(bwt ~ blength + gestweeks, data = birthweight_clean)
+model2 <- lm(bwt ~ bhead * blength * babysex, data = birthweight_clean)
+
+cv_error <- function(model, data) {
+  crossv_mc(data, 100) %>%
+    mutate(error = map2_dbl(train, test, ~ mean((.y$bwt - predict(model, newdata = .y))^2))) %>%
+    summarize(mean_error = mean(error))
+}
+
+error1 <- cv_error(model1, birthweight_clean)
+error2 <- cv_error(model2, birthweight_clean)
+
+```
+
