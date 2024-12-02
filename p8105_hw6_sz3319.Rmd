@@ -1,0 +1,24 @@
+---
+title: "p8105_hw5_sz3319"
+author: "Shiyu Zhang"
+date: "2024-12-02"
+output: 
+  github_document
+
+---
+
+
+```{r, message = FALSE, warning = FALSE}
+library(tidyverse)
+library(knitr)
+library(rvest)
+library(broom)
+library(dplyr)
+library(purrr)
+library(ggplot2)
+```
+
+
+## Problem 1
+
+### 1.1 
