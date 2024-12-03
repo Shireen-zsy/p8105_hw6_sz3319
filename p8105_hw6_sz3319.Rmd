@@ -4,7 +4,6 @@ author: "Shiyu Zhang"
 date: "2024-12-02"
 output: 
   github_document
-
 ---
 
 
@@ -17,57 +16,53 @@ library(ggplot2)
 library(rnoaa)
 library(dplyr)
 library(broom)
-library(kableExtra)
+library(modelr)
 ```
 
 
 ## Problem 1
 
-### 1.1 
-
 ```{r, warning=FALSE, message=FALSE}
-# 下载2017年Central Park的天气数据
-weather_df <- rnoaa::meteo_pull_monitors(
+
+weather_df = rnoaa::meteo_pull_monitors(
   c("USW00094728"),
   var = c("PRCP", "TMIN", "TMAX"), 
   date_min = "2017-01-01",
   date_max = "2017-12-31"
-) %>%
+) |>
   mutate(
     name = recode(id, USW00094728 = "CentralPark_NY"),
     tmin = tmin / 10,
     tmax = tmax / 10
-  ) %>%
+  ) |>
   select(name, id, everything())
 
-# 线性回归模型：tmax作为因变量，tmin作为自变量
-lm_fit <- lm(tmax ~ tmin, data = weather_df)
+lm_fit = lm(tmax ~ tmin, data = weather_df)
 
-# 提取回归结果
-glance_fit <- broom::glance(lm_fit)
-tidy_fit <- broom::tidy(lm_fit)
+glance_fit = broom::glance(lm_fit)
+tidy_fit = broom::tidy(lm_fit)
 
-# Bootstrap 分析
+# Bootstrap
 set.seed(123)
-bootstrap_samples <- 5000
-bootstrap_results <- replicate(
+bootstrap_samples = 5000
+bootstrap_results = replicate(
   bootstrap_samples,
   {
-    sample_indices <- sample(nrow(weather_df), replace = TRUE)
-    sample_data <- weather_df[sample_indices, ]
-    fit <- lm(tmax ~ tmin, data = sample_data)
+    sample_indices = sample(nrow(weather_df), replace = TRUE)
+    sample_data = weather_df[sample_indices, ]
+    fit = lm(tmax ~ tmin, data = sample_data)
     c(broom::glance(fit)$r.squared, broom::tidy(fit)$estimate[2])
   }
 )
 
-# 提取结果并作图
-r_squared_values <- bootstrap_results[1, ]
-beta_1_values <- bootstrap_results[2, ]
+
+r_squared_values = bootstrap_results[1, ]
+beta_1_values = bootstrap_results[2, ]
 
 hist(r_squared_values, main = "Distribution of R-squared from Bootstrap Samples", xlab = "R-squared")
 hist(beta_1_values, main = "Distribution of Beta_1 from Bootstrap Samples", xlab = "Beta_1")
 
-# 计算95%置信区间
+# 95% CI
 quantile(r_squared_values, c(0.025, 0.975))
 quantile(beta_1_values, c(0.025, 0.975))
 
@@ -87,6 +82,7 @@ homicide_data = read_csv("data/homicide-data.csv", na = c("NA", "", ".")) |>
 homicides_cleaned = homicide_data |>
   filter(!(city %in% c("Dallas", "Phoenix", "Kansas City", "Tulsa"))) |> 
   filter(victim_race %in% c("White", "Black")) |> 
+  filter(!is.na(victim_age)) |> 
   mutate(city_state = paste(city, state, sep = ", "),
          solved = if_else(disposition %in% c("Closed without arrest", "Open/No arrest"), 0, 1),
          victim_age = as.numeric(victim_age))
@@ -97,120 +93,204 @@ homicides_cleaned = homicide_data |>
 
 ```{r, warning=FALSE, message=FALSE}
 # Choose Baldimore data.
-baltimore_data <- homicides_cleaned %>% filter(city_state == "Baltimore, MD")
+baltimore_data = homicides_cleaned |> filter(city_state == "Baltimore, MD")
 
 # glm for Baltimore
-glm_fit_bal <- glm(solved ~ victim_age + victim_sex + victim_race, data = baltimore_data, family = binomial)
-tidy_glm_bal <- broom::tidy(glm_fit_bal, conf.int = TRUE)
+glm_fit_bal = glm(solved ~ victim_age + victim_sex + victim_race, data = baltimore_data, family = binomial)
+tidy_glm_bal = broom::tidy(glm_fit_bal, conf.int = TRUE)
 ```
 
 
-```{r}
-result_summary_bal <- tidy_glm_bal |>
+```{r, warning=FALSE, message=FALSE}
+result_summary_bal = tidy_glm_bal |>
    mutate(
     OR = round(exp(estimate), 4), 
     conf.low = exp(estimate - 1.96 * std.error),
     conf.high = exp(estimate + 1.96 * std.error), 
     CI = paste0("(", round(conf.low, 4), ", ", round(conf.high, 4), ")")  
   ) |>
-  select(term, OR, CI)
+  select(term, OR, CI) |> 
+  filter(term == "victim_sexMale")
 
 result_summary_bal |>
-  knitr::kable() |> 
-  kable_styling(full_width = FALSE) %>%
-  column_spec(3, width = "6cm") 
+  knitr::kable() 
 ```
 
-* The male ........
+* The adjusted odds ratio (OR) for male victims compared to female victims is **0.4255**, with a 95% confidence interval of **(0.3246, 0.5579)**. 
+* It shows that when controlling other variables (age and race), the likelihood of a homicide involving a male victim being solved is 42.55% of that for a female victim. 
+* Since the confidence interval is entirely below 1, this result is statistically significant, suggesting that homicides involving male victims are **less likely to be solved** compared to those involving female victims.
 
 ### 2.3 Analyze all cities
 
-```{r, warning=FALSE}
-
-glm_results <- homicides_cleaned %>%
-  group_by(city_state) %>%
-  nest() %>%
+```{r, warning=FALSE, message=FALSE}
+glm_results = homicides_cleaned |>
+  group_by(city_state) |>
+  nest() |>
   mutate(
     glm_model = map(data, ~ glm(solved ~ victim_age + victim_sex + victim_race, data = ., family = binomial)),
     tidy_model = map(glm_model, broom::tidy),
     conf_int = map(glm_model, ~ confint(.)) 
-  ) %>%
+  ) |>
   mutate(
     tidy_model = map2(tidy_model, conf_int, ~ {
-      # 将置信区间添加到 tidy 对象中
-      conf_df <- as.data.frame(.y)
-      names(conf_df) <- c("conf.low", "conf.high")
-      tidy_df <- bind_cols(.x, conf_df)
+      conf_df = as.data.frame(.y)
+      names(conf_df) = c("conf.low", "conf.high")
+      tidy_df = bind_cols(.x, conf_df)
       tidy_df
     })
-  ) %>%
+  ) |>
   unnest(cols = tidy_model)
+```
 
-# 计算调整后的 OR 和 CI
-glm_results <- glm_results %>%
+```{r}
+# adjusted OR & CI
+glm_results = glm_results |>
   mutate(
     OR = exp(estimate),  
     conf.low = exp(conf.low), 
     conf.high = exp(conf.high), 
     CI = paste0("(", round(conf.low, 4), ", ", round(conf.high, 4), ")") 
-  ) %>%
-  filter(term == "victim_sexMale") |> 
-  select(city_state, OR, CI, p.value)
+  ) |>
+  filter(term == "victim_sexMale") 
 
-glm_results |>
+glm_results_summary =
+  glm_results |>
+  select(city_state, OR, CI, p.value) |> 
   arrange(OR) |> 
-  knitr::kable(, digits = 4) |> 
-  kable_styling(full_width = FALSE) %>%
-  column_spec(4, width = "6cm") 
+  knitr::kable(, digits = 4) 
+
+glm_results_summary
+```
+
+
+
+```{r}
+# make plot
+glm_results |>
+  ggplot(aes(x = reorder(city_state, OR), y = OR)) +
+  geom_point(size = 1, color = "blue") +  
+  geom_errorbar(aes(ymin = conf.low, ymax = conf.high), width = 0.2, color = "blue") + 
+  coord_flip() + 
+  labs(
+    title = "Estimated OR and 95% CI for Solving Homicides by City",
+    x = "City",
+    y = "Odds Ratio (Male vs Female)"
+  ) +
+  theme_minimal() + 
+  theme(
+    axis.text.y = element_text(size = 6),  
+    plot.title = element_text(hjust = 0.5) 
+  )
+
 ```
 
 The result shows that:
 
-* 
+* Most cities have OR less than 1, such as Omaha, NE and New York, NY. This indicates that male victim homicides are less likely to be solved compared to female victims in these cities.
+* In some cities, the 95% confidence intervals are **fully below 1** (eg. New York, Baton Rouge), suggesting that this difference is statistically significant, which means that male victim homicides are significantly less likely to be solved in these cities compared to female victim cases. However, in cities such as Long Beach, CA and San Bernardino, CA, the confidence interval **crosses 1**, which means that in these cities, the influence of gender on solving homicides is **not** statistically significant.
+* Some cities have OR greater than 1, such as Albuquerque, NM, Stockton, CA, and Fresno, CA. However, all CIs cross 1, which means that in these cities, the influence of gender on solving homicides is not statistically significant.
+* Some cities, such as Albuquerque, NM, have wide confidence intervals, indicating high variability in the data, which may because of smaller sample sizes or less stable data, leading to lower accuracy in estimates.
 
 ## Problem 3
 
 ```{r, message=FALSE, warning=FALSE}
 # Load data
-birthweight_data <- read_csv("data/birthweight.csv")
+birthweight_data = read_csv("data/birthweight.csv", na = c("NA", "", ".")) |> 
+  janitor::clean_names() |> 
+  rename_with(~ gsub("^x", "", .))
+```
+
+```{r}
+# data clean
+birthweight_clean = birthweight_data |>
+  mutate(
+    babysex = factor(babysex),
+    frace = factor(frace),
+    mrace = factor(mrace),
+    malform = factor(malform)
+  ) |> 
+  drop_na()
+```
+
+
+```{r, warning=FALSE, message=FALSE}
+# model with all variables
+full_model = lm(bwt ~ .,
+                 data = birthweight_clean)
+
+# Stepwise to select variables (Using AIC to select)
+stepwise_model = step(full_model, direction = "both", trace = FALSE)
+
+summary(stepwise_model)
+```
+
+```{r}
+# Model with chosen variables
+p3_model = lm(bwt ~ babysex + bhead + blength + delwt + fincome + gaweeks + mheight + mrace + parity + ppwt + smoken, data = birthweight_clean)
+```
+
+
+```{r, message=FALSE, warning=FALSE}
+# add prediction & residual
+birthweight_clean = birthweight_clean |>
+  add_predictions(p3_model) |>
+  add_residuals(p3_model)
+
+# Make plot: fitted values vs. residuals
+ggplot(birthweight_clean, aes(x = pred, y = resid)) +
+  geom_point(alpha = 0.6) +
+  geom_smooth(se = FALSE, color = "red") +
+  labs(title = "Residuals vs Fitted Values",
+       x = "Fitted Values",
+       y = "Residuals") +
+  theme_minimal()
+
+```
+
+The plot shows that residuals are not evenly distributed around zero, especially with a noticeable trend when fitted values are small. This suggests that the model might be missing some nonlinear relationships. Adding nonlinear terms or transforming variables could improve the model's accuracy.
+
+
+### 3.2 Compare Three Models
+
+```{r}
+# Two Models
+model1 = lm(bwt ~ blength + gaweeks, data = birthweight_clean)
+
+model2 = lm(bwt ~ bhead + blength + babysex + bhead * blength + blength * babysex + bhead * babysex + bhead * blength * babysex, data = birthweight_clean)
 ```
 
 
 ```{r}
-# 数据清理
-birthweight_clean <- birthweight_data %>%
+# Monte Carlo
+set.seed(123)
+cv_splits = crossv_mc(birthweight_clean, 100)
+
+cv_results = cv_splits |>
   mutate(
-    babysex = factor(babysex, labels = c("Male", "Female")),
-    mrace = factor(mrace, labels = c("White", "Black", "Asian", "Puerto Rican", "Other")),
-    malform = factor(malform, labels = c("Absent", "Present"))
-  ) %>%
-  drop_na()
+    p3_model = map(train, ~ p3_model),
+    model1 = map(train, ~ model1),
+    model2 = map(train, ~ model2),
+    rp3_model = map2_dbl(p3_model, test, ~ rmse(.x, .y)),
+    rmse_model1 = map2_dbl(model1, test, ~ rmse(.x, .y)),
+    rmse_model2 = map2_dbl(model2, test, ~ rmse(.x, .y))
+  )
 
-# 回归模型
-birthweight_lm <- lm(bwt ~ bhead + blength + delwt + fincome + gestweeks, data = birthweight_clean)
+# mean_rmse
+mean_rmse = cv_results |>
+  summarise(
+    p3_model = mean(rp3_model),
+    model1 = mean(rmse_model1),
+    model2 = mean(rmse_model2)
+  )
 
-# 模型残差与拟合值的图
-birthweight_residuals <- birthweight_clean %>%
-  add_predictions(birthweight_lm) %>%
-  add_residuals(birthweight_lm)
-
-ggplot(birthweight_residuals, aes(x = pred, y = resid)) +
-  geom_point() +
-  geom_smooth(se = FALSE) +
-  labs(title = "Residuals vs Fitted Values", x = "Fitted Values", y = "Residuals")
-
-# 模型比较
-model1 <- lm(bwt ~ blength + gestweeks, data = birthweight_clean)
-model2 <- lm(bwt ~ bhead * blength * babysex, data = birthweight_clean)
-
-cv_error <- function(model, data) {
-  crossv_mc(data, 100) %>%
-    mutate(error = map2_dbl(train, test, ~ mean((.y$bwt - predict(model, newdata = .y))^2))) %>%
-    summarize(mean_error = mean(error))
-}
-
-error1 <- cv_error(model1, birthweight_clean)
-error2 <- cv_error(model2, birthweight_clean)
-
+kable(mean_rmse)
 ```
+
+From the result,
+
+* the `p3_model` has the smallest RMSE, which means that it performs the best in predicting birth weight;
+* `model1` has an RMSE of 330.014, which is the highest among all models. Therefore, only birth length and gestational age are insufficient to adequately explain the variation in birth weight;
+* `model2` has an RMSE of 286.489. It has head circumference, length, sex, and their interaction terms, but the predictive performance is not as good as the `p3_model`.
+
+
 
